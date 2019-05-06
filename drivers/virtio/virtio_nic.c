@@ -173,15 +173,16 @@ static int dev_release(struct inode *inodep, struct file *filep){
 static void handle_input(struct virtqueue *vq){
 	// TO DO
    unsigned int len;
-   struct torecieve *rcv_buf=NULL;
+   struct virtnic_info *rcv_vn=NULL;
    printk(KERN_INFO "NicDevice: inside handle_input");
    // if (var=virtqueue_get_buf(vq, &len)!=NULL){
    //    printk(KERN_INFO "NicDevice: no buf in get buf");
 	// 	return;
    // }
-   rcv_buf = virtqueue_get_buf(vq, &len);
-   printk(KERN_INFO "NicDevice: a = %d", rcv_buf->a);
-   printk(KERN_INFO "NicDevice: str = %s", rcv_buf->str);
+   rcv_vn = virtqueue_get_buf(vq, &len);
+   printk(KERN_INFO "NicDevice: len = %d", len);
+   printk(KERN_INFO "NicDevice: a = %d", rcv_vn->data.a);
+   printk(KERN_INFO "NicDevice: str = %s", rcv_vn->data.str);
    printk(KERN_INFO "NicDevice: buf is there in get buf");
 }
 static int virtnic_probe(struct virtio_device *vdev)

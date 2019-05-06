@@ -10,19 +10,35 @@
 #include <linux/init.h>           
 #include <linux/device.h>         
 #include <linux/fs.h>             
-#include <linux/uaccess.h>        
+#include <linux/uaccess.h>
+#include <linux/ioctl.h>
+#include <linux/semaphore.h>
+// #include <sys/ioctl.h>
+
+
+// #define PUT_VALUE _IOW('a','a',int32_t*)
+// #define GET_VALUE _IOR('a','b',int32_t*)
+
+#define PUT_VALUE 1
+// #define GET_VALUE 4
+
 #define  DEVICE_NAME "nicdevice"
 #define  CLASS_NAME  "nic"
 
 struct tosend {
+   int cmd;
    int a;
-   char str[10];
+   char str[256];
 };
+
 
 struct torecieve {
    int a;
-   char str[10];
+   char str[256];
 };
+
+struct semaphore sem;
+struct virtnic_info *rcv_vn=NULL;
 
 struct virtnic_info {
 	char name[25];
@@ -47,14 +63,92 @@ static int     dev_open(struct inode *, struct file *);
 static int     dev_release(struct inode *, struct file *);
 static ssize_t dev_read(struct file *, char *, size_t, loff_t *);
 static ssize_t dev_write(struct file *, const char *, size_t, loff_t *);
+static ssize_t ioctl_func(struct file *, unsigned int cmd, unsigned long arg);
 
 static struct file_operations fops =
 {
    .open = dev_open,
    .read = dev_read,
    .write = dev_write,
+   .unlocked_ioctl = ioctl_func,
    .release = dev_release,
 };
+static void register_buffer(int cmd, int key, char *value)
+{
+	// struct scatterlist sg1, sg2, *sgs[2];
+   
+   // unsigned int num_out = 0, num_in = 0;
+
+	// sg_init_one(&sg1, buf, size);
+   // sgs[num_out++] = &sg1;
+
+   // sg_init_one(&sg2, buf, size);
+   // sgs[num_out + num_in++] = &sg2;
+	/* There should always be room for one buffer. */
+	//virtqueue_add_outbuf(vn->vq, &sg, 1, buf, GFP_KERNEL);
+   // virtqueue_add_sgs(vn->vq, sgs, num_out, num_in, buf, GFP_KERNEL);
+   
+   int err;
+   struct scatterlist sg1, sg2, *sgs[2];
+   unsigned int num_out = 0, num_in = 0;
+   // sg_init_one(&sg, buf, size);
+   // char *buf1;
+   // buf1 = sg_virt(&sg);
+   // printk(KERN_INFO "nic %s----buf1---",buf1);
+   // virtqueue_add_outbuf(vn->vq, &sg, 1, buf, GFP_KERNEL);
+   // virtqueue_add_outbuf(vn->vq, &sg, 1, buf, GFP_ATOMIC);
+   vn->var.cmd=cmd;
+   vn->var.a=key;
+   strcpy(vn->var.str, value);
+   sg_init_one(&sg1, &vn->var, sizeof(vn->var));
+   sg_init_one(&sg2, &vn->data, sizeof(vn->data));
+   sgs[num_out++]=&sg1;
+   sgs[num_out + num_in++]=&sg2;
+   // err=virtqueue_add_outbuf(vn->vq, sgs, 1, vn, GFP_ATOMIC);
+   err=virtqueue_add_sgs(vn->vq, sgs, num_out, num_in, vn, GFP_ATOMIC);
+   printk(KERN_INFO "NicDevice: return value of add_sgs-%d", err);
+
+	if(virtqueue_kick(vn->vq)){
+		printk(KERN_INFO "NicDevice: kick passed");
+	}
+} 
+static ssize_t ioctl_func(struct file *file, unsigned int cmd, unsigned long arg){
+   struct tosend value1, value2;
+   unsigned long val;
+   printk(KERN_INFO "Value ioctl called with cmd = %d\n", cmd);
+   switch(cmd) {
+                case PUT_VALUE:
+                        copy_from_user(&value1 , (int32_t*) arg, sizeof(value1));
+                        switch(value1.cmd){
+                          case 1:
+                          printk(KERN_INFO "NicDevice: Value.a = %d\n", value1.a);
+                          printk(KERN_INFO "Value.str = %s\n", value1.str);
+                          register_buffer(value1.cmd, value1.a, value1.str);
+                          down(&sem);
+                          break;
+                          case 2:
+                          printk(KERN_INFO "Value in get_value");
+                          value2.a = value1.a;
+                          register_buffer(value2.cmd, value2.a, value2.str);
+                          down(&sem);
+                          strcpy(value2.str, rcv_vn->data.str);
+                          val = copy_to_user((int32_t*) arg, &value2, sizeof(value2));
+                          printk(KERN_INFO "Value val = %ld\n", val);
+                          break; 
+                        }
+                        break;
+               //  case GET_VALUE:
+               //          printk(KERN_INFO "Value in get_value");
+               //          value2.a = 100;
+               //          strcpy(value2.str, "from kernel");
+               //          val = copy_to_user((int32_t*) arg, &value2, sizeof(value2));
+               //          printk(KERN_INFO "Value val = %ld\n", val);
+               //          break;
+               default:
+                  printk(KERN_INFO "Value in default");
+        }
+        return 0;
+}
 static int nicDevice_init(void){
    printk(KERN_INFO "NicDevice: Initializing the NicDevice LKM\n");
  
@@ -84,6 +178,7 @@ static int nicDevice_init(void){
       return PTR_ERR(charDevice);
    }
    printk(KERN_INFO "NicDevice: device class created correctly\n"); // Made it! device was initialized
+   sema_init(&sem, 0);
    return 0;
 }
 
@@ -117,51 +212,13 @@ static ssize_t dev_read(struct file *filep, char *buffer, size_t len, loff_t *of
 }
 
 
-static void register_buffer(u8 *buf, size_t size)
-{
-	// struct scatterlist sg1, sg2, *sgs[2];
-   
-   // unsigned int num_out = 0, num_in = 0;
 
-	// sg_init_one(&sg1, buf, size);
-   // sgs[num_out++] = &sg1;
-
-   // sg_init_one(&sg2, buf, size);
-   // sgs[num_out + num_in++] = &sg2;
-	/* There should always be room for one buffer. */
-	//virtqueue_add_outbuf(vn->vq, &sg, 1, buf, GFP_KERNEL);
-   // virtqueue_add_sgs(vn->vq, sgs, num_out, num_in, buf, GFP_KERNEL);
-   
-   int err;
-   struct scatterlist sg1, sg2, *sgs[2];
-   unsigned int num_out = 0, num_in = 0;
-   // sg_init_one(&sg, buf, size);
-   // char *buf1;
-   // buf1 = sg_virt(&sg);
-   // printk(KERN_INFO "nic %s----buf1---",buf1);
-   // virtqueue_add_outbuf(vn->vq, &sg, 1, buf, GFP_KERNEL);
-   // virtqueue_add_outbuf(vn->vq, &sg, 1, buf, GFP_ATOMIC);
-
-   vn->var.a=100;
-   strcpy(vn->var.str, (char *)buf);
-   sg_init_one(&sg1, &vn->var, sizeof(vn->var));
-   sg_init_one(&sg2, &vn->data, sizeof(vn->data));
-   sgs[num_out++]=&sg1;
-   sgs[num_out + num_in++]=&sg2;
-   // err=virtqueue_add_outbuf(vn->vq, sgs, 1, vn, GFP_ATOMIC);
-   err=virtqueue_add_sgs(vn->vq, sgs, num_out, num_in, vn, GFP_ATOMIC);
-   printk(KERN_INFO "NicDevice: return value of add_sgs-%d", err);
-
-	if(virtqueue_kick(vn->vq)){
-		printk(KERN_INFO "NicDevice: kick passed");
-	}
-} 
 
 static ssize_t dev_write(struct file *filep, const char *buffer, size_t len, loff_t *offset){
    sprintf(message, "%s(%zu letters)", buffer, len);   // appending received string with its length
    size_of_message = strlen(message);                 // store the length of the stored message
    printk(KERN_INFO "NicDevice: Received %zu characters from the user\n", len);
-   register_buffer(buffer, len);
+   // register_buffer(buffer, len);
    return len;
 }
  
@@ -173,7 +230,7 @@ static int dev_release(struct inode *inodep, struct file *filep){
 static void handle_input(struct virtqueue *vq){
 	// TO DO
    unsigned int len;
-   struct virtnic_info *rcv_vn=NULL;
+   
    printk(KERN_INFO "NicDevice: inside handle_input");
    // if (var=virtqueue_get_buf(vq, &len)!=NULL){
    //    printk(KERN_INFO "NicDevice: no buf in get buf");
@@ -184,6 +241,7 @@ static void handle_input(struct virtqueue *vq){
    printk(KERN_INFO "NicDevice: a = %d", rcv_vn->data.a);
    printk(KERN_INFO "NicDevice: str = %s", rcv_vn->data.str);
    printk(KERN_INFO "NicDevice: buf is there in get buf");
+   up(&sem);
 }
 static int virtnic_probe(struct virtio_device *vdev)
 {
